@@ -3,9 +3,14 @@
 # by Drew Wingfield
 
 #region Imports
+import logging
 #endregion Imports
 
 #region Setup
+logger = logging.getLogger(__name__)
+logging.basicConfig()
+logger.setLevel(logging.DEBUG)
+logger.debug("Logging set up correctly.")
 #endregion Setup
 
 def main() -> None:
@@ -13,7 +18,7 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    print("Running as main.")
+    logger.info("Running as main.")
     main()
 
 
