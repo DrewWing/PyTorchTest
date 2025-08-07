@@ -15,6 +15,11 @@ import numpy as np
 
 #endregion Imports
 
+
+SCORE_TYPE = np.uint8   # The numpy type for team scores (final and auto)
+STATS_TYPE = np.float16 # The numpy type for team statistics (OPR, AutoOPR, CCWM, etc)
+
+
 #region Setup
 logger = logging.getLogger(__name__)
 logging.basicConfig()
@@ -26,21 +31,33 @@ logger.info(f"Found {torch.accelerator.device_count()} accelerator devices.")
 
 #endregion Setup
 
+
+def who_won_to_bool(x) -> bool:
+    """ Returns true if x is Red, false otherwise. """
+    return x in ("Red", "red")
+
+
+
 def main() -> None:
-    device = torch.accelerator.current_accelerator().type if torch.accelerator.is_available() else "cpu"
+    device = torch.accelerator.current_accelerator().type if torch.accelerator.is_available() else "cpu" # type: ignore
     logger.info(f"Using {device} device")
     logger.info("Loading data")
+
     training_data = pd.read_csv("training_data.csv", dtype={
-        "scoreRedFinal": np.uint8,"scoreRedAuto": np.uint8, "scoreBlueFinal": np.uint8,"scoreBlueAuto": np.uint8, 
-        "redOPR": np.float16,"redAutoOPR": np.float16,"redCCWM": np.float16,
-        "blueOPR": np.float16,"blueAutoOPR": np.float16,"blueCCWM": np.float16,
-        "recentredOPR": np.float16,"recentredAutoOPR": np.float16,"recentredCCWM": np.float16,
-        "recentblueOPR": np.float16,"recentblueAutoOPR": np.float16,"recentblueCCWM": np.float16
+        "scoreRedFinal": SCORE_TYPE,"scoreRedAuto": SCORE_TYPE, "scoreBlueFinal": SCORE_TYPE,"scoreBlueAuto": SCORE_TYPE, 
+        "redOPR" : np.float16, "redAutoOPR" : STATS_TYPE, "redCCWM" : STATS_TYPE,
+        "blueOPR": STATS_TYPE, "blueAutoOPR": STATS_TYPE, "blueCCWM": STATS_TYPE,
+        "recentredOPR" : STATS_TYPE, "recentredAutoOPR" : STATS_TYPE, "recentredCCWM" : STATS_TYPE,
+        "recentblueOPR": STATS_TYPE, "recentblueAutoOPR": STATS_TYPE, "recentblueCCWM": STATS_TYPE
         })
+    
+    #TODO: Figure out memory efficiency stuff later
+    
     logger.debug("Training data: ")
     logger.debug(training_data)
 
     x_data = training_data[["redOPR","redAutoOPR","redCCWM","blueOPR","blueAutoOPR","blueCCWM","recentredOPR","recentredAutoOPR","recentredCCWM","recentblueOPR","recentblueAutoOPR","recentblueCCWM"]].to_numpy()
+    logger.debug("x_data (limited to input data): ")
     logger.debug(x_data)
 
     x_data = torch.from_numpy(x_data)
@@ -58,6 +75,11 @@ def main() -> None:
     y_data = training_data[["scoreRedFinal","scoreRedAuto","scoreBlueFinal","scoreBlueAuto"]].to_numpy()
     logger.debug("Y data:")
     logger.debug(y_data)
+
+    # Vectorization with help from https://stackoverflow.com/a/46470401/25598210
+    y_bool_data = np.vectorize(who_won_to_bool)(training_data[["whoWon"]])
+    logger.debug("Y bool data:")
+    logger.debug(y_bool_data)
     
 
 
