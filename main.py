@@ -104,7 +104,7 @@ class FtcDataset(Dataset):
 
         logger.debug(f"[FtcDataset][__init__] input_arr.shape={self.input_arr.shape}  label_arr.shape={self.label_arr.shape}")        
         assert self.input_arr.shape[0] == self.label_arr.shape[0]
-        logger.debug("[FtcDataset][__init__] Initializatino complete.")
+        logger.debug("[FtcDataset][__init__] Initializatin complete.")
 
         
     def __getitem__(self, index):
@@ -134,8 +134,13 @@ def main() -> None:
     #TODO: Figure out memory efficiency stuff later
     csv_data = FtcDataset(path="training_data.csv", type="continuous")
 
+    # Split into training and testing sets (with help from https://stackoverflow.com/a/51768651/25598210)
+    train_dataset, test_dataset = torch.utils.data.random_split(csv_data, [0.8, 0.2])
+    
     # Define data loader
-    dataset_loader = torch.utils.data.DataLoader(dataset=csv_data, batch_size=BATCH_SIZE, shuffle=SHUFFLE)    
+    train_dataset_loaded = torch.utils.data.DataLoader(dataset=train_dataset, batch_size=BATCH_SIZE, shuffle=SHUFFLE) 
+    test_dataset_loaded  = torch.utils.data.DataLoader(dataset=test_dataset,  batch_size=BATCH_SIZE, shuffle=SHUFFLE) 
+    
 
 
 
