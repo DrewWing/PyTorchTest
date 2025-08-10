@@ -22,9 +22,10 @@ import numpy as np
 
 SCORE_TYPE = np.uint8   # The numpy type for team scores (final and auto)
 STATS_TYPE = np.float16 # The numpy type for team statistics (OPR, AutoOPR, CCWM, etc)
+MODEL_TYPE_TORCH = torch.float16
 BATCH_SIZE = 64
 SHUFFLE    = False
-TYPE       = "discrete"
+TYPE       = "continuous"
 
 #region Setup
 logger = logging.getLogger(__name__)
@@ -159,10 +160,56 @@ class NeuralNetwork(nn.Module):
         logits = self.linear_relu_stack(x)
         return logits
 
+
+def train(dataloader, model, loss_fn, optimizer, device): 
+    """ This function was modified from the example at https://docs.pytorch.org/tutorials/beginner/basics/quickstart_tutorial.html """
+    size = len(dataloader.dataset)
+    logger.debug("[train] Training model")
+    model.train() # Set the model in training mode
+    logger.debug("[train] Model is in training mode")
+    for batch, (X, y) in enumerate(dataloader):
+        X, y = X.to(device=device, dtype=MODEL_TYPE_TORCH), y.to(device=device, dtype=MODEL_TYPE_TORCH)
+
+        #logger.debug(f"X is type {type(X)}, y is type {type(y)}") # For heavy debug use only
+
+        pred = model(X) # Make predictions for this batch
+
+        # Compute prediction error
+        loss = loss_fn(pred, y)
+
+        # Backpropagation
+        loss.backward()
+        optimizer.step() # Adjust learning weights
+        optimizer.zero_grad()
+
+        if batch % 100 == 0:
+            loss, current = loss.item(), (batch + 1) * len(X)
+            logger.debug(f"batch {batch:5}, loss: {loss:>7f}  [{current:>5d}/{size:>5d}]")
+
+
+def test(dataloader, model, loss_fn, device):
+    """ This function was modified from the example at https://docs.pytorch.org/tutorials/beginner/basics/quickstart_tutorial.html """
+    size = len(dataloader.dataset)
+    num_batches = len(dataloader)
+    model.eval()
+    test_loss, correct = 0, 0
+    with torch.no_grad():
+        for X, y in dataloader:
+            X, y = X.to(device=device, dtype=MODEL_TYPE_TORCH), y.to(device=device, dtype=MODEL_TYPE_TORCH)
+            pred = model(X)
+            test_loss += loss_fn(pred, y).item()
+            #correct += (pred.argmax(1) == y).type(torch.float).sum().item() # Disabled because it's for classification models only
+    test_loss /= num_batches
+    correct /= size
+    print(f"Test Error: \n Accuracy: {(100*correct):>0.1f}%, Avg loss: {test_loss:>8f} \n")
+
+
+
 #endregion Functions
 # Procedural
 
 def main() -> None:
+    torch.manual_seed(0) # TODO: Remove this later. it's for cacheing and speed
     # Main procedure with help from the PyTorch documentation: https://docs.pytorch.org/tutorials/beginner/basics/quickstart_tutorial.html
     device = torch.accelerator.current_accelerator().type if torch.accelerator.is_available() else "cpu" # type: ignore
     logger.info(f"Using {device} device")
@@ -187,6 +234,9 @@ def main() -> None:
 
     logger.info("Creating model...")
     model = NeuralNetwork(type=TYPE).to(device)
+
+    logger.debug(f"Casting model to type {MODEL_TYPE_TORCH}") #TODO: Unsure if this is needed
+    model = model.to(dtype=MODEL_TYPE_TORCH)
     
     logger.debug("Model: ")
     logger.debug(model)
@@ -203,7 +253,7 @@ def main() -> None:
     test_input = torch.tensor(data=[[295.35789473679995, 106.4017543859, 8.331578947399999, 282.0859259259, 97.3066666667, 7.512592592599999, 312.7883295194, 113.0205949656, -2.042334096100001, 307.2037037037, 106.4444444445, 7.7592592592999985]])
 
     #test_input = torch.rand(3, 12).to(device)
-    test_input = test_input.to(device)
+    test_input = test_input.to(device=device, dtype=MODEL_TYPE_TORCH)
     logger.debug("test input:")
     logger.debug(test_input)
     logits = model.linear_relu_stack(test_input)
@@ -213,6 +263,22 @@ def main() -> None:
 
     logger.debug("Prediction probabilities:")
     logger.debug(str(pred_probab))
+
+    logger.info("Creating loss function...")
+    loss_fn = nn.CrossEntropyLoss() # Using this for now bc it's the one used in the example, tune later
+    logger.info("Creating optimizer...")
+    optimizer = torch.optim.SGD(model.parameters(), lr=1e-4) # Again used example, tune later.
+    # lr is learning rate
+
+
+    epochs = 5
+    logger.info(f"Training with {epochs} epochs...")
+    for t in range(epochs):
+        logger.debug(f"Epoch {t+1}\n-------------------------------")
+        train(dataloader=train_dataset_loaded, model=model, loss_fn=loss_fn, optimizer=optimizer, device=device)
+        test( dataloader=test_dataset_loaded,  model=model, loss_fn=loss_fn, device=device)
+    logger.info("Training complete.")
+
 
     #print(f"Model structure: {model}\n\n")
 
