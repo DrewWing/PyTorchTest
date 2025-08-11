@@ -3,6 +3,7 @@
 .vscode
 
 *.ignore.*
+*.log
 
 *__pycache__*
 

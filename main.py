@@ -69,6 +69,9 @@ class FtcDataset(Dataset):
             "recentblueOPR": STATS_TYPE, "recentblueAutoOPR": STATS_TYPE, "recentblueCCWM": STATS_TYPE
             })
         
+
+        self.data_full.fillna(0, inplace=True) # Replace all nan values with zero
+        
         # Split the data
         self.input_arr = self.data_full[[
             "redOPR","redAutoOPR","redCCWM",
@@ -179,6 +182,7 @@ def train(dataloader, model, loss_fn, optimizer, device):
 
         # Backpropagation
         loss.backward()
+        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0) # Clip the gradient norm to prevent nan and infinite values
         optimizer.step() # Adjust learning weights
         optimizer.zero_grad()
 
@@ -201,7 +205,9 @@ def test(dataloader, model, loss_fn, device):
             #correct += (pred.argmax(1) == y).type(torch.float).sum().item() # Disabled because it's for classification models only
     test_loss /= num_batches
     correct /= size
-    print(f"Test Error: \n Accuracy: {(100*correct):>0.1f}%, Avg loss: {test_loss:>8f} \n")
+    #print(f"Test Error: \n Accuracy: {(100*correct):>0.1f}%, Avg loss: {test_loss:>8f} \n")
+    logger.debug(f"Test Error: \n Avg loss: {test_loss:>8f} \n")
+    return test_loss
 
 
 
@@ -210,6 +216,15 @@ def test(dataloader, model, loss_fn, device):
 
 def main() -> None:
     torch.manual_seed(0) # TODO: Remove this later. it's for cacheing and speed
+    torch.autograd.set_detect_anomaly(True) # Halts training when something goes wrong
+    
+    # Add file handler to logging
+    fileout = logging.FileHandler("log.log")
+    formatter = logging.Formatter('%(asctime)s | %(levelname)s | %(message)s')
+    fileout.setFormatter(formatter)
+    logger.addHandler(fileout)
+
+    
     # Main procedure with help from the PyTorch documentation: https://docs.pytorch.org/tutorials/beginner/basics/quickstart_tutorial.html
     device = torch.accelerator.current_accelerator().type if torch.accelerator.is_available() else "cpu" # type: ignore
     logger.info(f"Using {device} device")
@@ -265,20 +280,36 @@ def main() -> None:
     logger.debug(str(pred_probab))
 
     logger.info("Creating loss function...")
-    loss_fn = nn.CrossEntropyLoss() # Using this for now bc it's the one used in the example, tune later
+    #loss_fn = nn.CrossEntropyLoss() # Using this for now bc it's the one used in the example, tune later
+    loss_fn = nn.L1Loss()
     logger.info("Creating optimizer...")
-    optimizer = torch.optim.SGD(model.parameters(), lr=1e-4) # Again used example, tune later.
+    #optimizer = torch.optim.SGD(model.parameters(), lr=1e-4) # Again used example, tune later.
+    optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
     # lr is learning rate
 
 
-    epochs = 5
+
+    epochs = 100
+    loss_graph = []
+
     logger.info(f"Training with {epochs} epochs...")
     for t in range(epochs):
-        logger.debug(f"Epoch {t+1}\n-------------------------------")
-        train(dataloader=train_dataset_loaded, model=model, loss_fn=loss_fn, optimizer=optimizer, device=device)
-        test( dataloader=test_dataset_loaded,  model=model, loss_fn=loss_fn, device=device)
-    logger.info("Training complete.")
+        logger.debug("Parameters:")
+        for par in model.parameters():
+            logger.debug("  - "+str(par))
 
+        logger.debug(f"Epoch {t+1}\n-------------------------------")
+
+        train(dataloader=train_dataset_loaded, model=model, loss_fn=loss_fn, optimizer=optimizer, device=device)
+        loss = test( dataloader=test_dataset_loaded,  model=model, loss_fn=loss_fn, device=device)
+        loss_graph.append(loss)
+
+
+    logger.info("Training complete.")
+    logger.debug("Loss graph:")
+    logger.debug(loss_graph)
+    a = [(i, loss_graph[i]) for i in range(len(loss_graph)) ]
+    logger.debug(str(a))
 
     #print(f"Model structure: {model}\n\n")
 
