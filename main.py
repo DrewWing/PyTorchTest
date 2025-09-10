@@ -34,7 +34,7 @@ logger.setLevel(logging.DEBUG)
 logger.debug("Logging set up correctly.")
 
 logger.info(f"CUDA: {torch.cuda.is_available()}")
-logger.info(f"Found {torch.accelerator.device_count()} accelerator devices.")
+logger.info(f"Found {torch.accelerator.device_count() if torch.cuda.is_available() else 0} accelerator devices.")
 
 #endregion Setup
 
@@ -42,7 +42,6 @@ logger.info(f"Found {torch.accelerator.device_count()} accelerator devices.")
 def who_won_to_bool(x) -> bool:
     """ Returns true if x is Red, false otherwise. """
     return x in ("Red", "red")
-
 
 
 class FtcDataset(Dataset):
@@ -63,7 +62,7 @@ class FtcDataset(Dataset):
         # Load the data
         self.data_full = pd.read_csv(path, dtype={
             "scoreRedFinal": SCORE_TYPE,"scoreRedAuto": SCORE_TYPE, "scoreBlueFinal": SCORE_TYPE,"scoreBlueAuto": SCORE_TYPE, 
-            "redOPR" : np.float16, "redAutoOPR" : STATS_TYPE, "redCCWM" : STATS_TYPE,
+            "redOPR" : STATS_TYPE, "redAutoOPR" : STATS_TYPE, "redCCWM" : STATS_TYPE,
             "blueOPR": STATS_TYPE, "blueAutoOPR": STATS_TYPE, "blueCCWM": STATS_TYPE,
             "recentredOPR" : STATS_TYPE, "recentredAutoOPR" : STATS_TYPE, "recentredCCWM" : STATS_TYPE,
             "recentblueOPR": STATS_TYPE, "recentblueAutoOPR": STATS_TYPE, "recentblueCCWM": STATS_TYPE
@@ -111,7 +110,6 @@ class FtcDataset(Dataset):
         assert self.input_arr.shape[0] == self.label_arr.shape[0]
         logger.debug("[FtcDataset][__init__] Initializatin complete.")
 
-        
     def __getitem__(self, index):
         """ Returns tensor, label. """
         # Get the data
@@ -159,39 +157,83 @@ class NeuralNetwork(nn.Module):
 
     def forward(self, x):
         # Unsure what any of this does, really. I'm assuming it evaluates the model?
-        x = self.flatten(x)
+        #x = self.flatten(x) # Not necessary
         logits = self.linear_relu_stack(x)
         return logits
 
 
-def train(dataloader, model, loss_fn, optimizer, device): 
+def train(dataloader, model: NeuralNetwork, loss_fn, optimizer, device): 
     """ This function was modified from the example at https://docs.pytorch.org/tutorials/beginner/basics/quickstart_tutorial.html """
     size = len(dataloader.dataset)
+    logger.debug("[train]")
+    logger.debug("[train]")
+
+    logger.debug("[train] - - - - - - - - ")
     logger.debug("[train] Training model")
+    logger.debug("[train]")
+    logger.debug("[train]")
+
+
     model.train() # Set the model in training mode
     logger.debug("[train] Model is in training mode")
     for batch, (X, y) in enumerate(dataloader):
+        logger.debug(f"[train] batch {batch:5}")
+
+        
         X, y = X.to(device=device, dtype=MODEL_TYPE_TORCH), y.to(device=device, dtype=MODEL_TYPE_TORCH)
 
         #logger.debug(f"X is type {type(X)}, y is type {type(y)}") # For heavy debug use only
+
+        if torch.any(torch.isnan(X)):
+            assert False # NaNs found in input X!
+        
+        if torch.any(torch.isnan(y)):
+            assert False # NaNs found in input y!
 
         pred = model(X) # Make predictions for this batch
 
         # Compute prediction error
         loss = loss_fn(pred, y)
 
+        logger.debug(f"[train]   Loss={loss} ({type(loss)})")
+
+        
+        optimizer.zero_grad()
+
         # Backpropagation
-        loss.backward()
+        try:
+            loss.backward()
+        except RuntimeError as e:
+            logger.error("[train] Error occured!")
+            logger.error("[train] X: ")
+            logger.error(X)
+            logger.error("[train] y: ")
+            logger.error(y)
+            logger.error("[train] model parameteres:")
+            for par in model.parameters():
+                logger.error("  - "+str(par))
+            logger.error("[train] grad:")
+            logger.error(X.grad)
+            # torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0) # Clip the gradient norm to prevent nan and infinite values
+            try:
+                torch.nn.utils.clip_grad_value_(model.parameters(), clip_value=0.1) # Clip the gradient norm to prevent nan and infinite values
+                logger.error("[train] Clipped parameters:")
+                for par in model.parameters():
+                    logger.error("  - "+str(par))
+            except:
+                logger.info("[train[ Unable to clip parameters.")
+            raise e
+
         torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0) # Clip the gradient norm to prevent nan and infinite values
         optimizer.step() # Adjust learning weights
         optimizer.zero_grad()
 
         if batch % 100 == 0:
             loss, current = loss.item(), (batch + 1) * len(X)
-            logger.debug(f"batch {batch:5}, loss: {loss:>7f}  [{current:>5d}/{size:>5d}]")
+            logger.debug(f"[train] batch {batch:5}, loss: {loss:>7f}  [{current:>5d}/{size:>5d}]")
 
 
-def test(dataloader, model, loss_fn, device):
+def test(dataloader, model: NeuralNetwork, loss_fn, device):
     """ This function was modified from the example at https://docs.pytorch.org/tutorials/beginner/basics/quickstart_tutorial.html """
     size = len(dataloader.dataset)
     num_batches = len(dataloader)
