@@ -1,3 +1,5 @@
 torch
+scikit-learn
 numpy
 pandas
+joblib

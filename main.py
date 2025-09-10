@@ -6,21 +6,38 @@
 
 #region Imports
 print("Wait for imports...")
+
+print("  - Builtins")
 import logging
 import os
 from typing import Literal
 
+logger = logging.getLogger(__name__)
+logging.basicConfig()
+logger.setLevel(logging.DEBUG)
+logger.debug("Logging set up correctly.")
+
+logger.info("  - Torch")
 import torch # I used "python -m pip install -r .\requirements.txt --index-url https://download.pytorch.org/whl/cu128" - see https://pytorch.org/get-started/locally/ for details.
 from torch import nn
 from torch.utils.data.dataset import Dataset
 
+logger.info("  - Scikit preprocessing")
+from sklearn.preprocessing import RobustScaler
+
+logger.info("  - Pandas")
 import pandas as pd
+logger.info("  - Numpy")
 import numpy as np
 
+logger.info("  - Joblib")
+from joblib import dump, load
+
+logger.info("Imports complete.")
 #endregion Imports
 
 
-SCORE_TYPE = np.uint8   # The numpy type for team scores (final and auto)
+SCORE_TYPE = np.int16   # The numpy type for team scores (final and auto)
 STATS_TYPE = np.float16 # The numpy type for team statistics (OPR, AutoOPR, CCWM, etc)
 MODEL_TYPE_TORCH = torch.float16
 BATCH_SIZE = 64
@@ -28,11 +45,6 @@ SHUFFLE    = False
 TYPE       = "continuous"
 
 #region Setup
-logger = logging.getLogger(__name__)
-logging.basicConfig()
-logger.setLevel(logging.DEBUG)
-logger.debug("Logging set up correctly.")
-
 logger.info(f"CUDA: {torch.cuda.is_available()}")
 logger.info(f"Found {torch.accelerator.device_count() if torch.cuda.is_available() else 0} accelerator devices.")
 
@@ -45,7 +57,13 @@ def who_won_to_bool(x) -> bool:
 
 
 class FtcDataset(Dataset):
-    def __init__(self, path: str | os.PathLike, type: Literal["discrete","continuous"]):
+    def __init__(
+            self, path: str | os.PathLike, 
+            type: Literal["discrete","continuous"], 
+            path_data_scalar: str = "", 
+            path_label_scalar: str= "",
+            disable_scaling: bool = False
+            ):
         """ 
         First Tech Challenge Dataset.
 
@@ -53,12 +71,33 @@ class FtcDataset(Dataset):
 
         type is either discrete (boolean true/false on if red wins)
         or continuous (scores of Red, RedAuto, Blue, BlueAuto).
+
+        path_data_scalar is the path to load a saved scalar from, or blank for a new Scalar object.
+        if disable_scaling is True, disables all scaling
         """
         self.path = path
         self.type = type
+        if path_data_scalar == "" or disable_scaling: # TODO: make into a load_scalar func
+            self.data_scalar = None
+        else:
+            try:
+                self.data_scalar = load(path_data_scalar)
+            except Exception as e:
+                logger.error(f"[FtcDataset][__init__] Loading a data scalar from path ({path_data_scalar}) failed.")
+                raise e
+        
+        if path_label_scalar == "" or disable_scaling:
+            self.label_scalar = None
+        else:
+            try:
+                self.label_scalar = load(path_label_scalar)
+            except Exception as e:
+                logger.error(f"[FtcDataset][__init__] Loading a label scalar from path ({path_label_scalar}) failed.")
+                raise e
 
         logger.debug(f'[FtcDataset][__init__] Loading FTC Dataset with type "{type} from path "{path}"')
 
+        #region loading
         # Load the data
         self.data_full = pd.read_csv(path, dtype={
             "scoreRedFinal": SCORE_TYPE,"scoreRedAuto": SCORE_TYPE, "scoreBlueFinal": SCORE_TYPE,"scoreBlueAuto": SCORE_TYPE, 
@@ -72,20 +111,20 @@ class FtcDataset(Dataset):
         self.data_full.fillna(0, inplace=True) # Replace all nan values with zero
         
         # Split the data
-        self.input_arr = self.data_full[[
+        self.data_arr = self.data_full[[
             "redOPR","redAutoOPR","redCCWM",
             "blueOPR","blueAutoOPR","blueCCWM",
             "recentredOPR","recentredAutoOPR","recentredCCWM",
             "recentblueOPR","recentblueAutoOPR","recentblueCCWM"
-            ]].to_numpy()
-        logger.debug("[FtcDataset][__init__] input_arr:")
-        logger.debug(self.input_arr)
+            ]]#.to_numpy()
+        logger.debug("[FtcDataset][__init__] data_arr:")
+        logger.debug(self.data_arr)
 
-        #self.input_arr = torch.from_numpy(self.input_arr)
+        #self.data_arr = torch.from_numpy(self.data_arr)
         # logger.debug("X data torch tensor from numpy:")
         # logger.debug(x_data)# Move the tensor to accelerator if available
         #if torch.accelerator.is_available():
-        #    self.input_arr = self.input_arr.to(torch.accelerator.current_accelerator())
+        #    self.data_arr = self.data_arr.to(torch.accelerator.current_accelerator())
 
         # logger.debug(f"Shape of tensor: {x_data.shape}")
         # logger.debug(f"Datatype of tensor: {x_data.dtype}")
@@ -106,14 +145,67 @@ class FtcDataset(Dataset):
         logger.debug("[FtcDataset][__init__] label_arr:")
         logger.debug(self.label_arr)
 
-        logger.debug(f"[FtcDataset][__init__] input_arr.shape={self.input_arr.shape}  label_arr.shape={self.label_arr.shape}")        
-        assert self.input_arr.shape[0] == self.label_arr.shape[0]
+        logger.debug(f"[FtcDataset][__init__] data_arr.shape={self.data_arr.shape}  label_arr.shape={self.label_arr.shape}")        
+        assert self.data_arr.shape[0] == self.label_arr.shape[0]
+        #endregion loading
+
+
+        #region scaling
+        
+        if disable_scaling:
+            logger.debug("[FtcDataset][__init__] Scaling disabled. Skipping scaling steps.")
+        else:
+            logger.debug("[FtcDataset][__init__] Scaling data...")
+
+            if self.data_scalar is None:
+                # If not loading a scalar, create and fit one
+                logger.debug("[FtcDataset][__init__] No scalar loaded. Creating and fitting one...")
+                self.data_scalar = RobustScaler()
+                self.data_scalar.fit(self.data_arr)
+
+
+
+            # Actually scale the array
+            # With help from the scikit learn docs: https://scikit-learn.org/stable/modules/generated/sklearn.preprocessing.RobustScaler.html#sklearn.preprocessing.RobustScaler
+            scaled_data = self.data_scalar.transform(self.data_arr)
+
+            logger.debug("[FtcDataset][__init__] Scaling complete. Saled dataset:")
+            logger.debug(scaled_data)
+            
+
+            # Scale labels
+            if type == "continuous":
+                logger.debug("[FtcDataset][__init__] Scaling labels...")
+
+                if self.label_scalar is None:
+                    # If not loading a scalar, create and fit one
+                    logger.debug("[FtcDataset][__init__] No scalar loaded. Creating and fitting one...")
+                    self.label_scalar = RobustScaler()
+                    self.label_scalar.fit(self.label_arr)
+
+                # Actually scale the array
+                # With help from the scikit learn docs: https://scikit-learn.org/stable/modules/generated/sklearn.preprocessing.RobustScaler.html#sklearn.preprocessing.RobustScaler
+                scaled_labels = self.label_scalar.transform(self.label_arr)
+
+                logger.debug("[FtcDataset][__init__] Scaling complete. Saled labels:")
+                logger.debug(scaled_labels)
+            else:
+                logger.debug("[FtcDataset][__init__] Not scaling labels - type is not 'continuous' so the labels should already be 0 or 1")
+            
+            # TODO: Implement saving scalarsd
+
+        #endregion scaling
+        
+        self.data_arr = self.data_arr.to_numpy()
+
         logger.debug("[FtcDataset][__init__] Initializatin complete.")
+
+    # TODO: add __repr__ and other class funcs.
 
     def __getitem__(self, index):
         """ Returns tensor, label. """
         # Get the data
-        item = self.input_arr[index] # TODO: Add index range validation later
+        item = self.data_arr[index] # TODO: Add index range validation later
         label = self.label_arr[index] # TODO: Add index range validation later
 
         # Turn the item into a tensor
@@ -123,7 +215,7 @@ class FtcDataset(Dataset):
         return (item, label)
 
     def __len__(self):
-        return self.input_arr.shape[0] # of how many examples(images?) you have
+        return self.data_arr.shape[0] # of how many examples(images?) you have
 
 
 class NeuralNetwork(nn.Module):
