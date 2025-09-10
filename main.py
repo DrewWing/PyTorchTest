@@ -14,7 +14,7 @@ from typing import Literal
 
 logger = logging.getLogger(__name__)
 logging.basicConfig()
-logger.setLevel(logging.DEBUG)
+logger.setLevel(logging.INFO)
 logger.debug("Logging set up correctly.")
 
 logger.info("  - Torch")
@@ -131,7 +131,7 @@ class FtcDataset(Dataset):
         # logger.debug(f"Device tensor is stored on: {x_data.device}")
 
         if type == "continuous":
-            self.label_arr = self.data_full[["scoreRedFinal","scoreRedAuto","scoreBlueFinal","scoreBlueAuto"]].to_numpy()
+            self.label_arr = self.data_full[["scoreRedFinal","scoreRedAuto","scoreBlueFinal","scoreBlueAuto"]]
             # logger.debug("Y data:")
             # logger.debug(y_data)
         
@@ -150,57 +150,45 @@ class FtcDataset(Dataset):
         #endregion loading
 
 
-        #region scaling
-        
         if disable_scaling:
             logger.debug("[FtcDataset][__init__] Scaling disabled. Skipping scaling steps.")
         else:
             logger.debug("[FtcDataset][__init__] Scaling data...")
+            self.data_arr = self.scale_data(data_to_scale=self.data_arr, scalar=self.data_scalar)
 
-            if self.data_scalar is None:
-                # If not loading a scalar, create and fit one
-                logger.debug("[FtcDataset][__init__] No scalar loaded. Creating and fitting one...")
-                self.data_scalar = RobustScaler()
-                self.data_scalar.fit(self.data_arr)
-
-
-
-            # Actually scale the array
-            # With help from the scikit learn docs: https://scikit-learn.org/stable/modules/generated/sklearn.preprocessing.RobustScaler.html#sklearn.preprocessing.RobustScaler
-            scaled_data = self.data_scalar.transform(self.data_arr)
-
-            logger.debug("[FtcDataset][__init__] Scaling complete. Saled dataset:")
-            logger.debug(scaled_data)
-            
-
-            # Scale labels
             if type == "continuous":
                 logger.debug("[FtcDataset][__init__] Scaling labels...")
+                self.label_arr = self.scale_data(data_to_scale=self.label_arr, scalar=self.label_scalar)
 
-                if self.label_scalar is None:
-                    # If not loading a scalar, create and fit one
-                    logger.debug("[FtcDataset][__init__] No scalar loaded. Creating and fitting one...")
-                    self.label_scalar = RobustScaler()
-                    self.label_scalar.fit(self.label_arr)
-
-                # Actually scale the array
-                # With help from the scikit learn docs: https://scikit-learn.org/stable/modules/generated/sklearn.preprocessing.RobustScaler.html#sklearn.preprocessing.RobustScaler
-                scaled_labels = self.label_scalar.transform(self.label_arr)
-
-                logger.debug("[FtcDataset][__init__] Scaling complete. Saled labels:")
-                logger.debug(scaled_labels)
-            else:
-                logger.debug("[FtcDataset][__init__] Not scaling labels - type is not 'continuous' so the labels should already be 0 or 1")
-            
-            # TODO: Implement saving scalarsd
-
-        #endregion scaling
-        
-        self.data_arr = self.data_arr.to_numpy()
+        try:
+            self.label_arr = self.label_arr.to_numpy()
+            self.data_arr  = self.data_arr.to_numpy()
+        except AttributeError as e:
+            pass # If scaling worked correctly, this throws errors. Not sure why but whatever.
 
         logger.debug("[FtcDataset][__init__] Initializatin complete.")
 
     # TODO: add __repr__ and other class funcs.
+
+    def scale_data(self, data_to_scale, scalar: None | RobustScaler):
+        """ Returns a scaled version of the data. MAY OR MAY NOT DEEP COPY. If no scalar present, creates one. """
+
+        if scalar is None:
+            # If not loading a scalar, create and fit one
+            logger.debug("[FtcDataset][scale_data] No scalar loaded. Creating and fitting one...")
+            scalar = RobustScaler()
+            scalar.fit(data_to_scale)
+
+        # Actually scale the array
+        # With help from the scikit learn docs: https://scikit-learn.org/stable/modules/generated/sklearn.preprocessing.RobustScaler.html#sklearn.preprocessing.RobustScaler
+        scaled_data = scalar.transform(data_to_scale) # pyright: ignore[reportOptionalMemberAccess]
+
+        logger.debug("[FtcDataset][__init__] Scaling complete. Saled dataset:")
+        logger.debug(scaled_data)
+
+        return scaled_data
+        
+        # TODO: Implement saving scalarsd
 
     def __getitem__(self, index):
         """ Returns tensor, label. """
@@ -417,8 +405,8 @@ def main() -> None:
     #loss_fn = nn.CrossEntropyLoss() # Using this for now bc it's the one used in the example, tune later
     loss_fn = nn.L1Loss()
     logger.info("Creating optimizer...")
-    #optimizer = torch.optim.SGD(model.parameters(), lr=1e-4) # Again used example, tune later.
-    optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
+    optimizer = torch.optim.SGD(model.parameters(), lr=1e-4) # Again used example, tune later.
+    #optimizer = torch.optim.Adam(model.parameters(), lr=1e-5)
     # lr is learning rate
 
 
@@ -432,7 +420,8 @@ def main() -> None:
         for par in model.parameters():
             logger.debug("  - "+str(par))
 
-        logger.debug(f"Epoch {t+1}\n-------------------------------")
+        logger.debug("\n-------------------------------")
+        logger.info(f"Epoch {t+1}")
 
         train(dataloader=train_dataset_loaded, model=model, loss_fn=loss_fn, optimizer=optimizer, device=device)
         loss = test( dataloader=test_dataset_loaded,  model=model, loss_fn=loss_fn, device=device)
@@ -440,10 +429,10 @@ def main() -> None:
 
 
     logger.info("Training complete.")
-    logger.debug("Loss graph:")
-    logger.debug(loss_graph)
+    logger.info("Loss graph:")
+    logger.info(loss_graph)
     a = [(i, loss_graph[i]) for i in range(len(loss_graph)) ]
-    logger.debug(str(a))
+    logger.info(str(a))
 
     #print(f"Model structure: {model}\n\n")
 
