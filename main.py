@@ -256,6 +256,9 @@ def train(dataloader, model: NeuralNetwork, loss_fn, optimizer, device):
 
     model.train() # Set the model in training mode
     logger.debug("[train] Model is in training mode")
+    train_losses = []
+    matches_correct = [] # An item for every match set, 1 if all correct and 0 if all incorrect
+
     for batch, (X, y) in enumerate(dataloader):
         logger.debug(f"[train] batch {batch:5}")
 
@@ -274,6 +277,31 @@ def train(dataloader, model: NeuralNetwork, loss_fn, optimizer, device):
 
         # Compute prediction error
         loss = loss_fn(pred, y)
+
+        # print("x")
+        # print(X)
+        # print("\n\ny")
+        # print(y)
+        # print("\n\n")
+        # print("pred")
+        # print(pred)
+
+        #corr = (y[0] > y[2]) == (pred[0] > pred[2])
+        corr = torch.where((y[:,0] > y[:,2]) == (pred[:,0] > pred[:,2]), 1, 0) # TODO: Add a variable to disable stats stuff later.
+        #matches_correct.append(torch.mean(corr))
+        # print("\n\n corr")
+        # print(corr)
+
+        # print(f"\n\nlen success: {len(corr)}")
+        # print(f"\n\nlen total: {len(y)}")
+        matches_correct.append( corr.to(device='cpu').numpy().mean() )
+        # exit()
+
+        try:
+            train_losses.append(loss.item()) # Pushing it back to the CPU with help from https://stackoverflow.com/a/72742578/25598210
+        except Exception as e:
+            pass
+            # If it's NaN or something, we'll catch it later
 
         logger.debug(f"[train]   Loss={loss} ({type(loss)})")
 
@@ -311,6 +339,8 @@ def train(dataloader, model: NeuralNetwork, loss_fn, optimizer, device):
         if batch % 100 == 0:
             loss, current = loss.item(), (batch + 1) * len(X)
             logger.debug(f"[train] batch {batch:5}, loss: {loss:>7f}  [{current:>5d}/{size:>5d}]")
+    
+    return np.mean(train_losses), np.mean(matches_correct)
 
 
 def test(dataloader, model: NeuralNetwork, loss_fn, device):
@@ -318,18 +348,22 @@ def test(dataloader, model: NeuralNetwork, loss_fn, device):
     size = len(dataloader.dataset)
     num_batches = len(dataloader)
     model.eval()
-    test_loss, correct = 0, 0
+    test_loss = 0
+    correct = []
     with torch.no_grad():
         for X, y in dataloader:
             X, y = X.to(device=device, dtype=MODEL_TYPE_TORCH), y.to(device=device, dtype=MODEL_TYPE_TORCH)
             pred = model(X)
             test_loss += loss_fn(pred, y).item()
             #correct += (pred.argmax(1) == y).type(torch.float).sum().item() # Disabled because it's for classification models only
+            corr = torch.where((y[:,0] > y[:,2]) == (pred[:,0] > pred[:,2]), 1, 0) # TODO: Add a variable to disable stats stuff later.
+            correct.append(corr.to(device="cpu").numpy().mean())
+    
     test_loss /= num_batches
-    correct /= size
+    correct = np.mean(correct)
     #print(f"Test Error: \n Accuracy: {(100*correct):>0.1f}%, Avg loss: {test_loss:>8f} \n")
     logger.debug(f"Test Error: \n Avg loss: {test_loss:>8f} \n")
-    return test_loss
+    return test_loss, correct
 
 
 
@@ -405,14 +439,17 @@ def main() -> None:
     #loss_fn = nn.CrossEntropyLoss() # Using this for now bc it's the one used in the example, tune later
     loss_fn = nn.L1Loss()
     logger.info("Creating optimizer...")
-    optimizer = torch.optim.SGD(model.parameters(), lr=1e-4) # Again used example, tune later.
+    optimizer = torch.optim.SGD(model.parameters(), lr=0.005)
     #optimizer = torch.optim.Adam(model.parameters(), lr=1e-5)
     # lr is learning rate
 
 
 
-    epochs = 100
-    loss_graph = []
+    epochs = 50
+    validation_loss_graph = []
+    train_loss_graph = []
+    train_m_corr_graph = [] # Train matches correct
+    valid_m_corr_graph = []
 
     logger.info(f"Training with {epochs} epochs...")
     for t in range(epochs):
@@ -423,16 +460,38 @@ def main() -> None:
         logger.debug("\n-------------------------------")
         logger.info(f"Epoch {t+1}")
 
-        train(dataloader=train_dataset_loaded, model=model, loss_fn=loss_fn, optimizer=optimizer, device=device)
-        loss = test( dataloader=test_dataset_loaded,  model=model, loss_fn=loss_fn, device=device)
-        loss_graph.append(loss)
+        train_loss, train_m_corr = train(dataloader=train_dataset_loaded, model=model, loss_fn=loss_fn, optimizer=optimizer, device=device)
+        train_loss_graph.append(train_loss)
+        train_m_corr_graph.append(train_m_corr)
+        validation_loss, valid_m_corr = test( dataloader=test_dataset_loaded,  model=model, loss_fn=loss_fn, device=device)
+        validation_loss_graph.append(validation_loss)
+        valid_m_corr_graph.append(valid_m_corr)
+
+        logger.info(f"    Training loss: {train_loss:.4f} Validation loss: {validation_loss:.4f}     Train Matches Correct: {train_m_corr:.2%}%  Validation Matches Correct: {valid_m_corr:.2%}")
 
 
     logger.info("Training complete.")
     logger.info("Loss graph:")
-    logger.info(loss_graph)
-    a = [(i, loss_graph[i]) for i in range(len(loss_graph)) ]
+    logger.info(validation_loss_graph)
+    a = [(i, validation_loss_graph[i]) for i in range(len(validation_loss_graph)) ]
     logger.info(str(a))
+
+
+
+    from matplotlib import pyplot as plt
+    plt.plot(validation_loss_graph, label='Validation Loss')
+    plt.plot(train_loss_graph, label='Train Loss')
+    plt.legend()
+    plt.xlabel("Epochs")
+    plt.ylabel("Loss")
+    #plt.ylim(bottom=0)
+    plt.show()
+    plt.plot(valid_m_corr_graph, label='Validation Matches Correct')
+    plt.plot(train_m_corr_graph, label='Train Matches Correct')
+    plt.legend()
+    plt.xlabel("Epochs")
+    plt.ylabel("Loss")
+    plt.show()
 
     #print(f"Model structure: {model}\n\n")
 
