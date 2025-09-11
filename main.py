@@ -367,6 +367,24 @@ def test(dataloader, model: NeuralNetwork, loss_fn, device):
 
 
 
+def graph_losses(validation_losses, train_losses, validation_correct, train_correct):
+    """ Uses MatPlotLib to plot thhe loss and correct percentage graphs as a function of epochs. """
+    from matplotlib import pyplot as plt
+    plt.plot(validation_losses, label='Validation Loss')
+    plt.plot(train_losses, label='Train Loss')
+    plt.legend()
+    plt.xlabel("Epochs")
+    plt.ylabel("Loss")
+    #plt.ylim(bottom=0)
+    plt.show()
+    plt.plot(validation_correct, label='Validation Matches Correct')
+    plt.plot(train_correct, label='Train Matches Correct')
+    plt.legend()
+    plt.xlabel("Epochs")
+    plt.ylabel("Loss")
+    plt.show()
+
+
 #endregion Functions
 # Procedural
 
@@ -412,29 +430,6 @@ def main() -> None:
     logger.debug("Model: ")
     logger.debug(model)
 
-
-    # Test INput
-    # scoreRedFinal,scoreRedAuto,scoreBlueFinal,scoreBlueAuto,redOPR,               redAutoOPR,         redCCWM,            blueOPR,            blueAutoOPR,blueCCWM,recentredOPR,recentredAutoOPR,recentredCCWM,recentblueOPR,recentblueAutoOPR,recentblueCCWM,whoWon
-    # 190,  75, 100,70,                                     295.35789473679995,     106.4017543859,     8.331578947399999,  282.0859259259,     97.3066666667,7.512592592599999,312.7883295194,113.0205949656,-2.042334096100001,307.2037037037,106.4444444445,7.7592592592999985,Red
-    # 32,   8,  46, 11,                                     43.4265873016,          14.934523809600002, -6.4424603175,      34.2876984127,      6.351190476200001,6.585317460300001,43.4265873016,14.934523809600002,-6.4424603175,34.2876984127,6.351190476200001,6.585317460300001,Blue
-    # 36,   11, 43, 11,                                     34.711864406800004,     6.1016949153,       0.32203389829999995,47.0677966102,      8.4858757062,-0.3502824857999993,34.711864406800004,6.1016949153,0.32203389829999995,47.0677966102,8.4858757062,-0.3502824857999993,Blue
-    # 34,   5,  75, 11,                                     54.166666666699996,     9.3333333333,       2.1666666667000003, 51.6666666666,      12.666666666600001,8.3333333334,54.166666666699996,9.3333333333,2.1666666667000003,51.6666666666,12.666666666600001,8.3333333334,Blue
-    # 36,   0,  26, 11,                                     61.1093951094,          10.2702702703,      4.378378378400001,  54.7927927928,      13.1351351351,12.1891891892,61.1093951094,10.2702702703,4.378378378400001,54.7927927928,13.1351351351,12.1891891892,Red
-    # 29,   0,  68, 11,                                     57.0383333333,          10.094999999999999, 2.17,               52.3733333334,      13.36,9.96,57.0383333333,10.094999999999999,2.17,52.3733333334,13.36,9.96,Blue
-    test_input = torch.tensor(data=[[295.35789473679995, 106.4017543859, 8.331578947399999, 282.0859259259, 97.3066666667, 7.512592592599999, 312.7883295194, 113.0205949656, -2.042334096100001, 307.2037037037, 106.4444444445, 7.7592592592999985]])
-
-    #test_input = torch.rand(3, 12).to(device)
-    test_input = test_input.to(device=device, dtype=MODEL_TYPE_TORCH)
-    logger.debug("test input:")
-    logger.debug(test_input)
-    logits = model.linear_relu_stack(test_input)
-
-    softmax = nn.Softmax(dim=1)
-    pred_probab = softmax(logits)
-
-    logger.debug("Prediction probabilities:")
-    logger.debug(str(pred_probab))
-
     logger.info("Creating loss function...")
     #loss_fn = nn.CrossEntropyLoss() # Using this for now bc it's the one used in the example, tune later
     loss_fn = nn.L1Loss()
@@ -463,6 +458,7 @@ def main() -> None:
         train_loss, train_m_corr = train(dataloader=train_dataset_loaded, model=model, loss_fn=loss_fn, optimizer=optimizer, device=device)
         train_loss_graph.append(train_loss)
         train_m_corr_graph.append(train_m_corr)
+        
         validation_loss, valid_m_corr = test( dataloader=test_dataset_loaded,  model=model, loss_fn=loss_fn, device=device)
         validation_loss_graph.append(validation_loss)
         valid_m_corr_graph.append(valid_m_corr)
@@ -477,21 +473,12 @@ def main() -> None:
     logger.info(str(a))
 
 
-
-    from matplotlib import pyplot as plt
-    plt.plot(validation_loss_graph, label='Validation Loss')
-    plt.plot(train_loss_graph, label='Train Loss')
-    plt.legend()
-    plt.xlabel("Epochs")
-    plt.ylabel("Loss")
-    #plt.ylim(bottom=0)
-    plt.show()
-    plt.plot(valid_m_corr_graph, label='Validation Matches Correct')
-    plt.plot(train_m_corr_graph, label='Train Matches Correct')
-    plt.legend()
-    plt.xlabel("Epochs")
-    plt.ylabel("Loss")
-    plt.show()
+    graph_losses(
+        train_losses        = train_loss_graph, 
+        validation_losses   = validation_loss_graph, 
+        train_correct       = train_m_corr_graph, 
+        validation_correct  = valid_m_corr_graph
+    )
 
     #print(f"Model structure: {model}\n\n")
 
