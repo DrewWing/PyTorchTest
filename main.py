@@ -20,7 +20,7 @@ logger.debug("Logging set up correctly.")
 logger.info("  - Torch")
 import torch # I used "python -m pip install -r .\requirements.txt --index-url https://download.pytorch.org/whl/cu128" - see https://pytorch.org/get-started/locally/ for details.
 from torch import nn
-from torch.utils.data.dataset import Dataset
+from torch.utils.data.dataset import ConcatDataset, Dataset
 
 logger.info("  - Scikit preprocessing")
 from sklearn.preprocessing import RobustScaler
@@ -77,24 +77,10 @@ class FtcDataset(Dataset):
         """
         self.path = path
         self.type = type
-        if path_data_scalar == "" or disable_scaling: # TODO: make into a load_scalar func
-            self.data_scalar = None
-        else:
-            try:
-                self.data_scalar = load(path_data_scalar)
-            except Exception as e:
-                logger.error(f"[FtcDataset][__init__] Loading a data scalar from path ({path_data_scalar}) failed.")
-                raise e
+        self.disable_scaling = disable_scaling
+        self.data_scalar  = self.load_scaler(path_data_scalar)
+        self.label_scalar = self.load_scaler(path_label_scalar)
         
-        if path_label_scalar == "" or disable_scaling:
-            self.label_scalar = None
-        else:
-            try:
-                self.label_scalar = load(path_label_scalar)
-            except Exception as e:
-                logger.error(f"[FtcDataset][__init__] Loading a label scalar from path ({path_label_scalar}) failed.")
-                raise e
-
         logger.debug(f'[FtcDataset][__init__] Loading FTC Dataset with type "{type} from path "{path}"')
 
         #region loading
@@ -168,7 +154,20 @@ class FtcDataset(Dataset):
 
         logger.debug("[FtcDataset][__init__] Initializatin complete.")
 
-    # TODO: add __repr__ and other class funcs.
+    def __str__(self) -> str:
+        return f"<FtcDataset object of type {self.type} with length {len(self)}, {'NO' if self.data_scalar is None else 'a'} data scalar and {'NO' if self.label_scalar is None else 'a'} label scalar.>"
+
+    def load_scaler(self, path_to_scalar: str | os.PathLike):
+        """ Attempts to load a scalar from a given path. If no path given, does nothing. """
+        if path_to_scalar == "" or self.disable_scaling: # TODO: make into a load_scalar func
+            return None
+        else:
+            try:
+                return load(path_to_scalar)
+            except Exception as e:
+                logger.error(f"[FtcDataset][load_scalar] Failed to load a data scalar from path {path_to_scalar}")
+                raise e
+
 
     def scale_data(self, data_to_scale, scalar: None | RobustScaler):
         """ Returns a scaled version of the data. MAY OR MAY NOT DEEP COPY. If no scalar present, creates one. """
@@ -193,7 +192,7 @@ class FtcDataset(Dataset):
     def __getitem__(self, index):
         """ Returns tensor, label. """
         # Get the data
-        item = self.data_arr[index] # TODO: Add index range validation later
+        item  = self.data_arr[ index] # TODO: Add index range validation later
         label = self.label_arr[index] # TODO: Add index range validation later
 
         # Turn the item into a tensor
@@ -215,7 +214,7 @@ class NeuralNetwork(nn.Module):
         super().__init__()
 
         num_inputs = 12
-        num_middle = 10
+        num_middle = 8
         if type == "discrete":
             num_outputs = 1
         else:
@@ -224,9 +223,12 @@ class NeuralNetwork(nn.Module):
         self.flatten = nn.Flatten() # Not quite sure what this does
 
         # Create the stack of modules
-        self.linear_relu_stack = nn.Sequential(
+        self.linear_relu_stack = nn.Sequential( #TODO: Adjust as necessary
             nn.Linear(num_inputs, num_middle),
-            nn.ReLU(),
+            nn.LeakyReLU(),
+            nn.Linear(num_middle, num_middle),
+            nn.Linear(num_middle, num_middle),
+            #nn.LeakyReLU(),
             nn.Linear(num_middle, num_outputs)
             # nn.Linear(28*28, 512),
             # nn.ReLU(),
@@ -234,6 +236,15 @@ class NeuralNetwork(nn.Module):
             # nn.ReLU(),
             # nn.Linear(512, 10),
         )
+
+    def save_model_and_create_dirs(self, save_path: str | os.PathLike):
+        """ Saves the model to a path, creating directories if necessary. """
+        dir_path = os.path.dirname(save_path)
+
+        if not(os.path.isdir(dir_path)):
+            os.makedirs(dir_path)
+
+        torch.save(self, f=save_path)
 
     def forward(self, x):
         # Unsure what any of this does, really. I'm assuming it evaluates the model?
@@ -366,22 +377,60 @@ def test(dataloader, model: NeuralNetwork, loss_fn, device):
     return test_loss, correct
 
 
+def predict_pandas(data: pd.DataFrame, model: NeuralNetwork, is_scaled: bool = False):
+    """ Predicts the outcomes of given pandas DataFrame matches using a given model. """
+    # TODO: Filter the data as appropriate (put correct columns in correct places, temporarily turn into numpy array)
+    # TODO: Scale data, if necessary.
+    # TODO: Predict the results.
+    # TODO: Turn the results into pandas DataFrame with appropriate column headers.
+    # TODO: return the results.
+    pass
 
-def graph_losses(validation_losses, train_losses, validation_correct, train_correct):
+
+
+def corr_slope(graph: list, n: int = 20) -> float:
+    """ Returns the slope from n entries ago to the current entry. If <n entries exist, uses first/oldest entry for comparison. """
+    n += 1 # Indices go brrr
+    for i in range(n, 0, -1):
+        try:
+            return (graph[-1] - graph[- i]) / i
+        except IndexError as e:
+            continue
+
+    raise RuntimeError("Something went wrong!")
+
+
+def graph_losses(validation_losses, train_losses, validation_correct, train_correct, title: str = "", save:bool = False, savename: str = ""):
     """ Uses MatPlotLib to plot thhe loss and correct percentage graphs as a function of epochs. """
+    save_name = savename.replace(" ","_").replace("/","_").replace("$","_")
+
+    logger.info(f"title=({title})")
+    logger.info(f"save_name=({save_name})")
+    
     from matplotlib import pyplot as plt
+
     plt.plot(validation_losses, label='Validation Loss')
     plt.plot(train_losses, label='Train Loss')
     plt.legend()
     plt.xlabel("Epochs")
     plt.ylabel("Loss")
+    plt.title(title, wrap=True)
+    plt.suptitle("Loss vs Epochs")
     #plt.ylim(bottom=0)
+    if save:
+        plt.savefig(save_name+"_loss.ignore.svg", format="svg", bbox_inches='tight')
+
     plt.show()
+    plt.title(title, wrap=True)
+    plt.suptitle("Epochs vs Correct Outcome Prediction")
     plt.plot(validation_correct, label='Validation Matches Correct')
     plt.plot(train_correct, label='Train Matches Correct')
     plt.legend()
     plt.xlabel("Epochs")
-    plt.ylabel("Loss")
+    plt.ylabel("Correct Outcome Predicted")
+    if save:
+        plt.savefig(save_name+"_corr.ignore.svg", format="svg", bbox_inches='tight')
+
     plt.show()
 
 
@@ -431,16 +480,21 @@ def main() -> None:
     logger.debug(model)
 
     logger.info("Creating loss function...")
-    #loss_fn = nn.CrossEntropyLoss() # Using this for now bc it's the one used in the example, tune later
-    loss_fn = nn.L1Loss()
+    #loss_fn = nn.SmoothL1Loss()
+    #loss_fn = nn.L1Loss()
+    loss_fn = nn.MSELoss()
     logger.info("Creating optimizer...")
-    optimizer = torch.optim.SGD(model.parameters(), lr=0.005)
-    #optimizer = torch.optim.Adam(model.parameters(), lr=1e-5)
+    optimizer = torch.optim.SGD(model.parameters(), lr=0.005) # was 0.005
+    #optimizer = torch.optim.Adagrad(model.parameters(), lr=0.01)
+    #optimizer = torch.optim.ASGD(model.parameters(), lr=0.005)
+    #optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
     # lr is learning rate
 
+    import time
+    time_start = time.time()
 
-
-    epochs = 50
+    epochs = 100
+    # TODO: Turn all stats into a numpy array or pandas dataframe for code compaction
     validation_loss_graph = []
     train_loss_graph = []
     train_m_corr_graph = [] # Train matches correct
@@ -463,8 +517,15 @@ def main() -> None:
         validation_loss_graph.append(validation_loss)
         valid_m_corr_graph.append(valid_m_corr)
 
-        logger.info(f"    Training loss: {train_loss:.4f} Validation loss: {validation_loss:.4f}     Train Matches Correct: {train_m_corr:.2%}%  Validation Matches Correct: {valid_m_corr:.2%}")
+        # Get the slope of the correct % validation. If it's too close to zero (i.e. training progress is slowing down), end training early.
+        slope = corr_slope(n=25, graph=valid_m_corr_graph)
 
+        logger.info(f"    Training loss: {train_loss:.4f} Validation loss: {validation_loss:.4f}     Train Matches Correct: {train_m_corr:.2%}  Validation Matches Correct: {valid_m_corr:.2%}   Corr slope: {slope:.5}")
+
+        if t > 10 and ((0.0 < slope and 0.0008 > abs(slope) and 0.005 > abs(corr_slope(n=5, graph=valid_m_corr_graph))) or (slope < -0.0005)):
+            logger.warning(f"Slope is {slope}, which is too low. Terminating training early.")
+            epochs = t+1
+            break
 
     logger.info("Training complete.")
     logger.info("Loss graph:")
@@ -472,12 +533,17 @@ def main() -> None:
     a = [(i, validation_loss_graph[i]) for i in range(len(validation_loss_graph)) ]
     logger.info(str(a))
 
+    train_time = time.time() - time_start
+    logger.info(f"Training took a total of {(train_time/60):.2f} minutes, or {(train_time/3600):.3f} hours. That's an average of {(train_time/epochs):.1f} seconds ({(train_time/(60*epochs)):.2f} minutes) per epoch.")
 
     graph_losses(
         train_losses        = train_loss_graph, 
         validation_losses   = validation_loss_graph, 
         train_correct       = train_m_corr_graph, 
-        validation_correct  = valid_m_corr_graph
+        validation_correct  = valid_m_corr_graph,
+        title   =f"Model {  model.__class__.__name__} Loss {loss_fn.__class__.__name__}\nOptimizer {  optimizer.__class__.__name__} lr={optimizer.param_groups[0]['lr']}",
+        savename=f"{        model.__class__.__name__}_loss_{     loss_fn.__class__.__name__}_optim_{          optimizer.__class__.__name__}_lr_{optimizer.param_groups[0]['lr']}_epochs_{epochs}",
+        save=True
     )
 
     #print(f"Model structure: {model}\n\n")
